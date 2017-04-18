@@ -1,113 +1,127 @@
-# Ducks: Redux Reducer Bundles
+# Ducks++: Redux Reducer Bundles
 
 <img src="duck.jpg" align="right"/>
 
-I find as I am building my redux app, one piece of functionality at a time, I keep needing to add  `{actionTypes, actions, reducer}` tuples for each use case. I have been keeping these in separate files and even separate folders, however 95% of the time, it's only one reducer/actions pair that ever needs their associated actions.
-
-To me, it makes more sense for these pieces to be bundled together in an isolated module that is self contained, and can even be packaged easily into a library.
-
-## The Proposal
+This is an enhancement to the original [Ducks](https://github.com/erikras/ducks-modular-redux) proposal. Basically, the concept is keep redux functionality as modular as possible. The original Ducks standard requires that for each module the associated `{actionTypes, actions, reducer}` should be kept in one file. The additional rules in Ducks++ is to define a string constant inside the duck to determine where the state is stored in the store; this crucially allows the selectors to also be defined in the same file. Finally the default export should be an object which includes the `{actionTypes, actions, reducer, selectors, mountPoint}`.
 
 ### Example
-
-See also: [Common JS Example](CommonJs.md).
+A duck module for handling error state in an app:
 
 ```javascript
-// widgets.js
+// errors.js
+
+import {createSelector} from 'reselect';
+import {fromJS, List} from 'immutable';
+
+const STORE_MOUNT_POINT = 'globals/errors';
+const ADD_GLOBAL_ERROR = 'UTILS:ADD_GLOBAL_ERROR';
+const CLEAR_GLOBAL_ERRORS = 'UTILS:CLEAR_GLOBAL_ERROR';
 
 // Actions
-const LOAD   = 'my-app/widgets/LOAD';
-const CREATE = 'my-app/widgets/CREATE';
-const UPDATE = 'my-app/widgets/UPDATE';
-const REMOVE = 'my-app/widgets/REMOVE';
+const addGlobalError = error => ({
+    type: ADD_GLOBAL_ERROR,
+    payload: error
+});
 
-// Reducer
-export default function reducer(state = {}, action = {}) {
-  switch (action.type) {
-    // do reducer stuff
-    default: return state;
-  }
-}
+const clearGlobalErrors = () => ({
+    type: CLEAR_GLOBAL_ERRORS
+});
 
-// Action Creators
-export function loadWidgets() {
-  return { type: LOAD };
-}
+// Selectors
+const getGlobalErrors = state => state[STORE_MOUNT_POINT].get('errors');
+const selectGlobalErrors = createSelector(
+    getGlobalErrors,
+    errors => errors.toJS()
+);
 
-export function createWidget(widget) {
-  return { type: CREATE, widget };
-}
+const initialState = fromJS({
+    errors: []
+});
 
-export function updateWidget(widget) {
-  return { type: UPDATE, widget };
-}
+//reducer
+const reducer = (state = initialState, action = {}) => {
+    switch (action.type) {
+        case ADD_GLOBAL_ERROR:
+            return state.set('errors', state.get('errors').push(action.payload));
+        case CLEAR_GLOBAL_ERRORS:
+            return state.set('errors', List());
+        default:
+            return state;
+    }
+};
 
-export function removeWidget(widget) {
-  return { type: REMOVE, widget };
-}
+// interface
+const errors = {
+    mountPoint: STORE_MOUNT_POINT,
+    actionTypes: {ADD_GLOBAL_ERROR, CLEAR_GLOBAL_ERRORS},
+    actionCreators: {addGlobalError, clearGlobalErrors},
+    selectors: {selectGlobalErrors},
+    reducer
+};
+export default errors;
 ```
-### Rules
 
-A module...
-
-1. MUST `export default` a function called `reducer()`
-2. MUST `export` its action creators as functions
-3. MUST have action types in the form `npm-module-or-app/reducer/ACTION_TYPE`
-3. MAY export its action types as `UPPER_SNAKE_CASE`, if an external reducer needs to listen for them, or if it is a published reusable library
-
-These same guidelines are recommended for `{actionType, action, reducer}` bundles that are shared as reusable Redux libraries.
-
-### Name
-
-Java has jars and beans. Ruby has gems. I suggest we call these reducer bundles "ducks", as in the last syllable of "redux".
 
 ### Usage
 
-You can still do:
-
 ```javascript
+// store.js
 import { combineReducers } from 'redux';
-import * as reducers from './ducks/index';
+import * as ducks from './ducks/index';
 
-const rootReducer = combineReducers(reducers);
+function mapDucksToReducers(ducks) {
+    const reducers = Object.keys(ducks).map(key => {
+        const duck = ducks[key];
+        return {
+            [duck.mountPoint]: duck.reducer
+        };
+    });
+    return Object.assign({}, ...reducers);
+}
+
+const rootReducer = combineReducers(mapDucksToReducers(ducks));
 export default rootReducer;
 ```
 
-You can still do:
+A react error display component:
 
 ```javascript
-import * as widgetActions from './ducks/widgets';
+// Warning.js
+import React from 'react';
+import {connect} from 'react-redux';
+import globalErrors from 'state/errors';
+
+Snackbar.propTypes = {
+    label: React.PropTypes.string
+};
+
+const Warning = ({dismissAction, errors=''}) => (
+    <div>
+        {errors}
+        <button onClick={dismissAction}>Dismiss</button>
+    </div> 
+);
+
+Warning.propTypes = {
+    dismissAction: React.PropTypes.func.isRequired,
+    errors: React.PropTypes.string
+};
+
+const mapStateToProps = state => ({
+    errors: globalErrors.selectors.selectGlobalErrors(state)
+});
+
+const mapDispatchToProps = dispatch => ({
+    dismissAction: () => dispatch(globalErrors.actionCreators.clearGlobalErrors())
+});
+
+const WarningContainer = connect(
+    mapStateToProps, mapDispatchToProps
+)(Warning);
+
+export {WarningContainer as default, Warning};
 ```
-...and it will only import the action creators, ready to be passed to `bindActionCreators()`.
 
-There will be some times when you want to `export` something other than an action creator. That's okay, too. The rules don't say that you can *only* `export` action creators. When that happens, you'll just have to enumerate the action creators that you want. Not a big deal.
-
-```javascript
-import {loadWidgets, createWidget, updateWidget, removeWidget} from './ducks/widgets';
-// ...
-bindActionCreators({loadWidgets, createWidget, updateWidget, removeWidget}, dispatch);
-```
-
-### Example
-
-[React Redux Universal Hot Example](https://github.com/erikras/react-redux-universal-hot-example) uses ducks. See [`/src/redux/modules`](https://github.com/erikras/react-redux-universal-hot-example/tree/master/src/redux/modules).
-
-[Todomvc using ducks.](https://github.com/goopscoop/ga-react-tutorial/tree/6-reduxActionsAndReducers)
-
-### Implementation
-
-The migration to this code structure was [painless](https://github.com/erikras/react-redux-universal-hot-example/commit/3fdf194683abb7c40f3cb7969fd1f8aa6a4f9c57), and I foresee it reducing much future development misery.
-
-Please submit any feedback via an issue or a tweet to [@erikras](https://twitter.com/erikras). It will be much appreciated.
-
-Happy coding!
-
--- Erik Rasmussen
-
-
-### Translation
-
-[한국어](https://github.com/JisuPark/ducks-modular-redux)
 
 ---
 
@@ -116,4 +130,3 @@ Happy coding!
 
 ---
 
-[![Beerpay](https://beerpay.io/erikras/ducks-modular-redux/badge.svg?style=beer-square)](https://beerpay.io/erikras/ducks-modular-redux)  [![Beerpay](https://beerpay.io/erikras/ducks-modular-redux/make-wish.svg?style=flat-square)](https://beerpay.io/erikras/ducks-modular-redux?focus=wish)
